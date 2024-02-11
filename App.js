@@ -1,13 +1,15 @@
 const { HttpClient, Api } = require('tonapi-sdk-js')
 const TelegramBot = require('node-telegram-bot-api')
 const express = require('express')
+const Message = require('./app/messages/Message')
+const fs = require('fs')
 
 
 module.exports = class App {
     PORT = process.env.PORT || 4446
     TON_NFT_ADDRESS = 'EQD3Ho_9KoqjSmNzfKorctLvTVabn9U_BqnjIPq17SlLs_9H'
     TON_API_TOKEN = process.env.TON_API_TOKEN
-    OBSERVATION_INTERVAL = 60_000
+    OBSERVATION_INTERVAL = 1_000
     COST_CEILING = 11
 
 
@@ -23,7 +25,9 @@ module.exports = class App {
 
     #startObserver = () => {
         setInterval(async () => {
-            this.sendCollection(JSON.stringify(await this.getCollection(), null, 2))
+            for (const nft of await this.getCollection()) {
+                this.sendMessage(this.makeMessageText(nft))
+            }
         }, this.OBSERVATION_INTERVAL)
     }
 
@@ -33,17 +37,20 @@ module.exports = class App {
         for (let i = 0; i < 4; i++) {
             const offset = 1000 * i
 
-            const response = await this.client.nft.getItemsFromCollection(this.TON_NFT_ADDRESS, { offset });
+            const response = await this.client.nft.getItemsFromCollection(this.TON_NFT_ADDRESS, { offset })
             const collection = response.nft_items
 
             for (let nft of collection) {
                 if (nft.sale && nft.sale.price.value / 1_000_000_000 < this.COST_CEILING && nft.sale.price.value > 0) {
-                    const data = {
-                        num: nft.metadata.name,
-                        price: nft.sale.price.value / 1_000_000_000
-                    }
-
-                    nfts.push(data)
+                    nfts.push({
+                        name: nft.metadata.name,
+                        num: nft.index - 1,
+                        price: nft.sale.price.value / 1_000_000_000,
+                        currency: nft.sale.price.token_name,
+                        link: nft.metadata.external_url,
+                        image: nft.previews[2].url,
+                        attributes: nft.metadata.attributes,
+                    })
                 }
             }
         }
@@ -51,8 +58,42 @@ module.exports = class App {
         return nfts
     }
 
-    sendCollection = (text) => {
-        this.bot.sendMessage(process.env.TG_CHAT_ID, text)
+    makeMessageText = (nft) => {
+        const message = new Message()
+
+        if (nft.link) {
+            message.addTextWithLink(nft.name, nft.link)
+        } else {
+            message.addText(nft.name)
+        }
+
+        message.addVerticalSpase(2)
+        message.addText('price: ' + nft.price + ' ' + nft.currency)
+        message.addVerticalSpase(2)
+
+        for (let i = 0; i < nft.attributes.length; i++) {
+            if (!nft.attributes[i].value) {
+                continue
+            }
+
+            if (!i) {
+                message.addTextWithLink('◾️', nft.image)
+                message.addTextWithLink( nft.attributes[i].trait_type + ': ' + nft.attributes[i].value)
+                message.addVerticalSpase()
+                continue
+            }
+
+            message.addText('◾️' + nft.attributes[i].trait_type + ': ' + nft.attributes[i].value)
+            message.addVerticalSpase()
+        }
+
+        message.addVerticalSpase()
+
+        return message.getText()
+    }
+
+    sendMessage = (text) => {
+        this.bot.sendMessage(process.env.TG_CHAT_ID, text, { parse_mode: 'MarkdownV2' })
     }
 
     #makeClient = () => {
